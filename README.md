@@ -4,7 +4,8 @@
 
 ## 日期归档
 
-- [2026-07-29：PCAP、QUIC 与 YouTube 视频 ID 识别](20260729/README.md)
+- [2026-07-28：PCAP、QUIC 与 YouTube 视频 ID 识别](20260728/README.md)
+- [2026-07-29：PCAP Record、UDP Datagram 与 QUIC Packet](20260729/README.md)
 
 ## 使用说明
 
