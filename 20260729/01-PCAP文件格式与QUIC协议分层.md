@@ -1,4 +1,4 @@
-# PCAP 文件结构、端序、时间精度与 QUIC 协议分层
+# PCAP Record、UDP Datagram、QUIC Packet 与协议分层
 
 经典 PCAP 是一种保存原始抓包记录的二进制格式。它不是解析后的 TCP、HTTP 或 QUIC 日志，而是保存“什么时候抓到一个包、抓到了多少字节、原始字节是什么”。
 
@@ -118,22 +118,214 @@ timestamp = ts_sec + ts_nsec / 1,000,000,000
 
 因此 `network` 不会被设置为 QUIC。经典 PCAP 通常只定义一个 LinkType；需要多个接口和丰富元数据时通常使用 PCAPNG。
 
-## QUIC 在协议栈中的位置
+## PCAP Record、UDP Datagram 与 QUIC Packet
+
+这三个概念分别属于抓包文件层、UDP 传输层和 QUIC 协议层，不能互相替代。
+
+| 概念 | 所属层级 | 定义 |
+| --- | --- | --- |
+| PCAP Record | 抓包文件层 | 抓包工具保存的一条捕获记录 |
+| UDP Datagram | UDP 传输层 | 一个 UDP Header 加一个 UDP Payload |
+| QUIC Packet | QUIC 协议层 | UDP Payload 中一个完整、可独立处理的 QUIC 协议单元 |
+
+### PCAP Record
+
+PCAP Record 是存储概念，不是网络协议本身的报文单位：
 
 ```text
-PCAP 文件层      保存捕获记录
-链路层           Ethernet / Wi-Fi
-网络层           IPv4 / IPv6
-UDP              承载 QUIC
-QUIC             可靠传输、多路复用和加密
-HTTP/3           可运行在 QUIC 之上
+PCAP Record
+├── Record Header
+│   ├── 捕获时间
+│   ├── 实际保存长度 incl_len
+│   └── 线上原始长度 orig_len
+└── Captured Packet Data
+    └── 抓包工具保存的原始字节
 ```
 
-一个捕获记录通常对应一个捕获到的链路层帧，其中包含一个 UDP Datagram；一个 UDP Datagram 又可能合并一个或多个 QUIC Packet。因此不能默认：
+Captured Packet Data 从哪一层开始由 LinkType 决定。Ethernet 抓包通常保存一个 Ethernet Frame；Raw IP 抓包可能直接从 IP Header 开始。
+
+### UDP Datagram
+
+UDP Datagram 是 UDP 协议定义的数据单元：
+
+```text
+UDP Datagram
+├── UDP Header：8 字节
+└── UDP Payload：可变长度
+```
+
+UDP Header 包含源端口、目的端口、UDP Length 和 Checksum。普通情况下：
+
+```text
+udp_payload_length = udp.length - 8
+```
+
+在 QUIC 通信中，UDP Payload 用来承载一个或多个 QUIC Packet。
+
+### QUIC Packet
+
+QUIC Packet 是 QUIC 协议自己的数据单元：
+
+```text
+QUIC Packet
+├── QUIC Header
+└── Protected Payload
+    └── 一个或多个 QUIC Frame
+```
+
+QUIC Frame 才是 ACK、STREAM、CRYPTO、PADDING 等结构化协议信息。一个 QUIC Packet 可以包含多个 QUIC Frame。
+
+## 完整嵌套关系
+
+```text
+PCAP 文件
+└── PCAP Record
+    ├── PCAP Record Header
+    └── Ethernet Frame
+        ├── Ethernet Header
+        └── IP Packet
+            ├── IP Header
+            └── UDP Datagram
+                ├── UDP Header
+                └── UDP Payload
+                    ├── QUIC Packet 1
+                    │   └── 一个或多个 QUIC Frame
+                    └── QUIC Packet 2
+                        └── 一个或多个 QUIC Frame
+```
+
+RFC 9000 明确定义，一个 UDP Datagram 可以封装一个或多个 QUIC Packet。将多个 QUIC Packet 放入同一个 UDP Datagram 称为 Packet Coalescing，常见于握手期间把 Initial 和 Handshake Packet 一起发送。[RFC 9000](https://www.rfc-editor.org/rfc/rfc9000.html)
+
+说明性示例：
+
+```text
+PCAP Record #420
+└── Ethernet Frame
+    └── IPv4 Packet
+        └── UDP Datagram
+            ├── UDP Header：8 字节
+            └── UDP Payload：1350 字节
+                ├── QUIC Initial Packet：1100 字节
+                └── QUIC Handshake Packet：250 字节
+```
+
+此时关系是：
+
+```text
+1 个 PCAP Record
+→ 1 个 UDP Datagram
+→ 2 个 QUIC Packet
+```
+
+因此不能默认：
 
 ```text
 一个 PCAP Record = 一个 QUIC Packet
 ```
+
+## PCAP Record 是否等于一个 UDP Datagram
+
+普通 Ethernet 抓包且没有分片、截断和网卡卸载时，包含 UDP 的 PCAP Record 通常可以近似看作：
+
+```text
+一个 PCAP Record
+→ 一个 Ethernet Frame
+→ 一个 IP Packet
+→ 一个完整 UDP Datagram
+```
+
+但以下情况会破坏这种近似关系。
+
+### IP 分片
+
+一个 UDP Datagram 可能被 IP 层拆成多个 Fragment：
+
+```text
+一个 UDP Datagram
+├── IP Fragment 1 → PCAP Record 1
+├── IP Fragment 2 → PCAP Record 2
+└── IP Fragment 3 → PCAP Record 3
+```
+
+只有完成 IP 重组后，三个捕获记录才对应一个完整 UDP Datagram。后续 Fragment 不能被当成独立的 UDP 事件。
+
+### 抓包截断
+
+如果 `snaplen` 太小，PCAP Record 可能只保存 Datagram 的前一部分：
+
+```text
+incl_len < orig_len
+```
+
+Record 仍然存在，但 Captured Packet Data 不完整。
+
+### 网卡卸载
+
+在终端主机抓包时，GRO、GSO、USO 等卸载机制可能使抓包工具看到经过聚合或尚未分段的数据。此时 PCAP Record 中的单位可能与线上实际发送的数据单位不同。
+
+### 非 UDP 捕获记录
+
+一个包含 QUIC 流量的 PCAP 文件还可能同时保存 ARP、DNS、TCP、ICMP 和其他后台通信，因此并非每个 PCAP Record 都包含 UDP Datagram。
+
+## “QUIC PCAP”的含义
+
+“QUIC PCAP”不是协议标准定义的数据单元，通常只是指：
+
+> 一个包含 QUIC 流量的 PCAP 或 PCAPNG 文件。
+
+该文件仍然使用普通 PCAP/PCAPNG 格式。Wireshark 将某个捕获记录显示为 QUIC，只表示解析器认为其中的 UDP Payload 符合 QUIC 格式，并不表示文件变成了另一种“QUIC PCAP 格式”。
+
+应当区分：
+
+```text
+QUIC PCAP   → 包含 QUIC 流量的抓包文件，非正式称呼
+QUIC Packet → QUIC 协议定义的数据单元
+```
+
+## 对 packet-level 训练的影响
+
+“Packet-level”仍然需要明确 Packet 指的是哪一层：
+
+```text
+PCAP Record-level
+UDP Datagram-level
+QUIC Packet-level
+```
+
+对于无密钥、被动分析的 YouTube QUIC 流量，推荐把训练事件定义为一个完整 UDP Datagram：
+
+```text
+event_i = {
+    timestamp,
+    direction,
+    udp_payload_length,
+    path_id
+}
+```
+
+预处理应执行：
+
+```text
+读取 PCAP Record
+→ 判断是否包含 UDP
+→ 处理 IP 分片、截断和卸载异常
+→ 恢复一个完整 UDP Datagram
+→ 为每个有效 UDP Datagram 生成一条模型事件
+```
+
+不应直接执行：
+
+```text
+读取一个 PCAP Record
+→ 无条件当成一个 QUIC Packet
+```
+
+选择 UDP Datagram 作为基础事件的原因是：
+
+- UDP 边界和 UDP Length 在无密钥旁路场景中稳定可见。
+- 一个 UDP Datagram 可能包含多个 QUIC Packet。
+- QUIC Short Header 和受保护字段使逐 QUIC Packet 解析更依赖解析器和密钥条件。
+- 这种定义比直接使用 PCAP Record 更容易统一处理分片、截断和捕获异常。
 
 QUIC 大部分内容受到加密保护。没有会话密钥时，旁路观察者主要使用时间、方向、UDP 长度、五元组路径和少量未加密头部信息进行分析，而不能直接读取 HTTP/3 URL 或媒体内容。
 
