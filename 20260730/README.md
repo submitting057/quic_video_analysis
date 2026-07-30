@@ -11,7 +11,9 @@
 - debug_info.txt 是 ABR 自适应码率与缓冲行为分析的主要数据源，以约 4 秒间隔采集 YouTube "Stats for Nerds" 快照。
 - adb_log.txt 体量大但提供系统级深挖能力，建议按标签或 PID 过滤使用。
 - 时间对齐是三者协作的核心，operate.log 中的 `phone_to_server_time_offset` 可将设备时间与 PCAP 抓包时间关联。
+- .metadata 文件是 PCAP 数据与采集环境的索引卡，记录会话元数据、设备信息、分类体系和采集参数，通过 `capture_id` 与日志文件关联，通过 `file_name` 定位 PCAP 抓包文件。
 
 ## 阅读顺序
 
 1. [采集日志文件说明](01-采集日志文件说明.md) — 三种日志的完整介绍，包括命名规则、内容结构、字段详解和协作关系
+2. [元数据文件说明](02-元数据文件说明.md) — .metadata 文件的完整介绍，包括字段分组、关联关系和典型用途
