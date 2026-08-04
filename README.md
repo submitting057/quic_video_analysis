@@ -7,6 +7,7 @@
 - [2026-07-28：PCAP、QUIC 与 YouTube 视频 ID 识别](20260728/README.md)
 - [2026-07-29：PCAP Record、UDP Datagram 与 QUIC Packet](20260729/README.md)
 - [2026-07-30：采集日志文件说明](20260730/README.md)
+- [2026-08-04：实测 PCAP 分析、视频段截取与预处理方案验证](20260804/README.md)
 
 ## 使用说明
 
