@@ -8,6 +8,7 @@
 - [2026-07-29：PCAP Record、UDP Datagram 与 QUIC Packet](20260729/README.md)
 - [2026-07-30：采集日志文件说明](20260730/README.md)
 - [2026-08-04：实测 PCAP 分析、视频段截取与预处理方案验证](20260804/README.md)
+- [2026-08-05：可扩展 PCAP 预处理方案与实现规范](20260805/README.md)
 
 ## 使用说明
 
